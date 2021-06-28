@@ -2,7 +2,7 @@
 # GMWO API Example - Getting variable data                                             #
 # For more explanation of the steps, see readme.md                                     #
 #                                                                                      #  
-# Prerequisities:                                                                      #  
+# Prerequisites:                                                                       #  
 # - Python 3 installed                                                                 #
 # - 'requests' package installed                                                       #    
 # - a GMWO access token, see https://model.oxfordeconomics.com/api/docs#authentication #

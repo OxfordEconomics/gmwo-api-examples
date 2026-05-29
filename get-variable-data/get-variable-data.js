@@ -12,7 +12,7 @@ const headers = { 'Authorization': 'Bearer { ACCESS_TOKEN }' };
 // Get forecasts to discover the forecast's id
 async function getForecasts() {
     // Getting forecasts for the global economic model
-    let forecasts = await fetch(`${baseUrl}/resources/oxford-economics/releases/GEM?includeAllFileTypes=false`, {
+    let forecasts = await fetch(`${baseUrl}/resources/oxford-economics/releases/Glocal Economic Model?includeAllFileTypes=false`, {
         headers
         });
     return forecasts.data;

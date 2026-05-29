@@ -15,7 +15,7 @@ access_token = <insert your access token here>
 headers = {'Authorization' : f'Bearer {access_token}'}
 
 # Discover the id of a Global Economic Model release forecast
-gemFolderResponse = requests.get(f"{base_url}/v1/resources/oxford-economics/releases/GEM", headers=headers)
+gemFolderResponse = requests.get(f"{base_url}/v1/resources/oxford-economics/releases/Global Economic Model", headers=headers)
 gemFolder = gemFolderResponse.json()
 forecastId = gemFolder["Children"][0]["Id"] # Pick first forecast
 

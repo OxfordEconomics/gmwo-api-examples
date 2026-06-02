@@ -70,7 +70,7 @@ get_VariableData <- function(forecastId, locations, indicators)
 }
 
 # get a list of forecasts
-resources <- get_Resources("oxford-economics/releases/GEM")
+resources <- get_Resources("oxford-economics/releases/Global Economic Model")
 
 # get the first forecast from the macro releases
 forecastId <- resources$Children[[1]]$Id[1]

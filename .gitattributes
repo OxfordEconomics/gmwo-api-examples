@@ -1,0 +1,10 @@
+# Excel workbooks are binary. Git detects this on its own, but saying so here rules
+# out a future line-ending or diff filter silently corrupting one.
+*.xlsm binary
+*.xlsx binary
+
+# VBA modules are stored byte for byte, CRLF included, rather than normalised to LF.
+# A client downloads export/vba/GMWO-Export.bas straight from GitHub and imports it
+# into Excel, and the VBA editor is unreliable about importing a file with LF-only
+# line endings. Excel writes these files as CRLF; keep them that way.
+*.bas -text

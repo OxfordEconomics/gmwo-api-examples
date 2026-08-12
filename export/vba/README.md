@@ -42,8 +42,8 @@ Plenty of organisations block `.xlsm` files outright. Download `GMWO-Export.xlsx
 2. Press **Alt+F11** to open the code editor.
 3. **File > Import File…**, choose `GMWO-Export.bas`, then press **Alt+Q**.
 4. Save the workbook, and click **Enable Content** if Excel asks.
-5. On the **Config** sheet, press **Check this workbook**. It runs 60 internal checks and
-   tells you whether everything is in place.
+5. On the **Config** sheet, press **Check this workbook**. It runs the file's own internal
+   checks and tells you whether everything is in place.
 
 You don't need the Developer tab for this — **Alt+F11** works without it — and you don't
 need to change any Excel settings. 

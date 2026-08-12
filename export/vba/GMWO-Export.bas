@@ -8,8 +8,8 @@ Option Explicit
 ' re-run build-single-module.ps1.
 '
 ' Import this into a macro-enabled workbook built from that repo, then press
-' Check this workbook on the Config sheet: it runs 60 self-tests and will say
-' whether the import worked.
+' Check this workbook on the Config sheet: it runs the file's own self-tests
+' and will say whether the import worked.
 '
 ' Two mechanical changes from the seven-module source: cross-module qualifiers
 ' are dropped, since the module names no longer exist, and every module-level
@@ -186,11 +186,27 @@ Public Function CfgValue(ByVal rangeName As String) As String
     End If
 End Function
 
-Public Sub SetCfgValue(ByVal rangeName As String, ByVal value As String)
+' Writes a cfg_* cell. Returns False when the write did not land.
+'
+' Verified by reading back rather than by trusting the assignment, because the three
+' ways it can fail do not look alike: a missing name and a broken one (#REF! after a
+' deleted row) both leave NamedRange returning Nothing, while a cell a client has
+' protected raises instead. One read-back covers all three.
+'
+' ClearToken is why this returns anything at all. A button that tells a client their
+' access token is gone when it is still in the file is worse than no button.
+Public Function SetCfgValue(ByVal rangeName As String, ByVal value As String) As Boolean
     Dim target As Range
+
     Set target = NamedRange(rangeName)
-    If Not target Is Nothing Then target.Value = value
-End Sub
+    If target Is Nothing Then Exit Function
+
+    On Error Resume Next
+    target.Value = value
+    On Error GoTo 0
+
+    SetCfgValue = (StrComp(CfgValue(rangeName), Trim$(value), vbBinaryCompare) = 0)
+End Function
 
 ' TRUE/FALSE cells arrive either as a real Boolean or as the text a user typed.
 Public Function CfgBool(ByVal rangeName As String) As Boolean
@@ -311,8 +327,13 @@ Public Function ValidateConfig() As String
 
     ' Every message names the box on the Config sheet by the label next to it, not
     ' by its cfg_ range name: the label is what the person reading this can see.
-    If Len(CfgBaseUrl()) = 0 Then _
+    If Len(CfgBaseUrl()) = 0 Then
         problems.Add "The API base URL box is empty. It should say https://model.oxfordeconomics.com/api"
+    ElseIf Not IsHttpsUrl(CfgBaseUrl()) Then
+        problems.Add "The API base URL box must start with https:// - your access token is never " & _
+                     "sent over an unencrypted connection. It should say " & _
+                     "https://model.oxfordeconomics.com/api"
+    End If
     If Len(CfgValue("cfg_AccessToken")) = 0 Then _
         problems.Add "The Access token box is empty. Paste your token into it."
     If Len(CfgValue("cfg_ForecastPath")) = 0 Then _
@@ -508,6 +529,20 @@ Private Function OpenRequest(ByVal method As String, ByVal url As String, _
                              ByVal receiveTimeoutMs As Long) As Object
     Dim http As Object
 
+    ' Because this is the one place the token is attached, it is also the right place
+    ' to make "the token never crosses an unencrypted connection" true by construction
+    ' rather than by every caller remembering to check.
+    '
+    ' It should be unreachable: ValidateConfig and CheckToken refuse a non-https base
+    ' url before any request is built, and the download guard below refuses the
+    ' artifact url. All three say something a client can act on, which this raise does
+    ' not - reaching here means a path was added that skipped them, and failing closed
+    ' with an ugly message beats sending the token in clear text.
+    If Not IsHttpsUrl(url) Then
+        Err.Raise vbObjectError + 514, "OpenRequest", _
+            "Refusing to send the access token to a non-https address: " & Left$(url, 300)
+    End If
+
     Set http = CreateObject("WinHttp.WinHttpRequest.5.1")
     http.SetTimeouts 0, 60000, 60000, receiveTimeoutMs      ' Resolve, Connect, Send, Receive - ms
     http.Open method, url, False
@@ -546,6 +581,19 @@ Failed:
     res.Status = 0
     res.ErrorText = Err.Description
 End Sub
+
+' True only for an absolute https url.
+'
+' Separate from the origin comparison below, and not foldable into it, because that
+' comparison measures the artifact url *against cfg_BaseUrl*: if the base itself were
+' http then an http artifact url would match it exactly and the guard would report all
+' clear while the token crossed the network in clear text. The scheme has to be
+' checked against a constant, not against the base.
+'
+' Public so modSelfTest can pin it, same reason as UrlOrigin below.
+Public Function IsHttpsUrl(ByVal url As String) As Boolean
+    IsHttpsUrl = (StrComp(Left$(Trim$(url), 8), "https://", vbTextCompare) = 0)
+End Function
 
 ' Scheme + host + port of a url, lowercased, with the path removed. "" when the
 ' string is not an absolute http-style url.
@@ -590,10 +638,15 @@ Public Function HttpDownloadToFile(ByVal url As String, ByVal filePath As String
     ' The strictness costs one thing: an explicit ":443" would not match a base url
     ' without one. Nothing observed from this API does that, and a loud refusal is
     ' the right way to fail if it ever changes.
+    '
+    ' The https test is deliberately not part of the equality: matching the base is
+    ' not enough when the base itself is what was tampered with, and an http base
+    ' against an http artifact url matches perfectly.
     expected = UrlOrigin(CfgBaseUrl())
     actual = UrlOrigin(url)
 
-    If Len(expected) = 0 Or Len(actual) = 0 Or StrComp(expected, actual, vbTextCompare) <> 0 Then
+    If Len(expected) = 0 Or Len(actual) = 0 Or Not IsHttpsUrl(expected) Or _
+       StrComp(expected, actual, vbTextCompare) <> 0 Then
         LogLine "REFUSED to download from '" & Left$(url, 300) & "' - expected the host in " & _
                       "cfg_BaseUrl (" & expected & "). The access token was not sent."
         If Len(actual) = 0 Then actual = "(not a recognisable web address)"
@@ -998,6 +1051,16 @@ Public Function CheckToken(ByRef resultMessage As String) As Boolean
         Exit Function
     End If
 
+    ' Checked here as well as in ValidateConfig because this button is the one entry
+    ' point that does not go through it, and it is the button that exists to send the
+    ' token somewhere.
+    If Not IsHttpsUrl(CfgBaseUrl()) Then
+        resultMessage = "The API base URL box on the " & SHEET_CONFIG & " sheet does not " & _
+                        "start with https://, so your token was not sent." & vbLf & vbLf & _
+                        "It should say https://model.oxfordeconomics.com/api"
+        Exit Function
+    End If
+
     Status "Checking the access token..."
     res = HttpSend("GET", CfgBaseUrl() & "/v1/users/me")
     LogLine "Token check: HTTP " & res.Status & " " & Left$(res.Body, 4000)
@@ -1237,8 +1300,21 @@ Private Sub ReportUnexpected(ByVal errNumber As Long, ByVal errDescription As St
            vbCritical, "GMWO export"
 End Sub
 
+' The failure branch matters more than the success one. This is the control the whole
+' "clear it before you send the file on" instruction rests on, so it has to be able to
+' say it did not work - silently doing nothing while showing the reassuring message
+' would send a client off to share a workbook with a live token in it.
 Public Sub ClearToken()
-    SetCfgValue "cfg_AccessToken", vbNullString
+    If Not SetCfgValue("cfg_AccessToken", vbNullString) Then
+        LogLine "Access token NOT cleared - the cfg_AccessToken cell could not be written"
+        MsgBox "Your access token could NOT be removed - it is still in this workbook." & vbLf & vbLf & _
+               "Do not send this file to anyone until it is gone." & vbLf & vbLf & _
+               "You can clear the Access token box on the " & SHEET_CONFIG & " sheet by " & _
+               "hand, or ask whoever sent you this file for a fresh copy.", _
+               vbCritical, "GMWO export"
+        Exit Sub
+    End If
+
     LogLine "Access token cleared"
     MsgBox "Your access token has been removed from this workbook." & vbLf & vbLf & _
            "Save the file now to keep it that way.", _
@@ -1290,23 +1366,33 @@ Public Sub SetResult(ByVal text As String, ByVal ok As Boolean)
     On Error Resume Next
     cell.Value = Replace$(text, vbLf, " ")
     cell.Font.Color = IIf(ok, RGB(0, 110, 0), RGB(170, 0, 0))
+    On Error GoTo 0
 End Sub
 
-' Appends a timestamped line to the Log sheet. Never raises: logging must not be
-' the thing that breaks an export.
+' Appends a timestamped line to the Log sheet. Never raises: logging must not be the
+' thing that breaks an export.
+'
+' The two suppressions are scoped to the statements that can actually fail - a missing
+' or renamed Log sheet, and writes to a sheet a client has protected. Everything
+' between them is arithmetic over a worksheet already known to exist, so it is left
+' uncovered deliberately: a fault there is a bug in this procedure and should surface
+' as one rather than disappear.
 Public Sub LogLine(ByVal text As String)
     Dim ws As Worksheet
     Dim nextRow As Long
 
     On Error Resume Next
     Set ws = ThisWorkbook.Worksheets(SHEET_LOG)
+    On Error GoTo 0
     If ws Is Nothing Then Exit Sub
 
     nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
     If nextRow < 2 Then nextRow = 2
 
+    On Error Resume Next
     ws.Cells(nextRow, 1).Value = Format$(Now, "yyyy-mm-dd hh:nn:ss")
     ws.Cells(nextRow, 2).Value = Left$(text, 32000)
+    On Error GoTo 0
 End Sub
 
 '=============================================================================
@@ -1393,6 +1479,7 @@ Private Sub RunAllChecks(ByRef failures As Collection)
     CheckHeaderRowFormats failures
     CheckLocationList failures
     CheckConfigLock failures
+    CheckCfgWrite failures
 End Sub
 
 ' Automation-only: pushes a csv through the real import path and inspects what
@@ -1636,6 +1723,25 @@ Private Sub CheckDownloadGuard(ByRef failures As Collection)
     message = HttpDownloadToFile("https://model.oxfordeconomics.com@evil.example/a", probeFile)
     CheckTrue failures, "download from a credentials-in-url host is refused", Len(message) > 0
     CheckTrue failures, "that refusal writes no file either", Len(Dir$(probeFile)) = 0
+
+    ' The scheme, which the comparison above cannot police on its own: it measures the
+    ' artifact url against cfg_BaseUrl, so if the base were http an http artifact url
+    ' would match it exactly and the guard would pass while the token went out in
+    ' clear text. IsHttpsUrl tests against a constant instead.
+    '
+    ' These pin the predicate. The backstop that uses it in OpenRequest cannot
+    ' be checked offline - it builds a live WinHttpRequest - so it is covered by
+    ' inspection and by the two callers tested here and in ValidateConfig, not by this.
+    CheckTrue failures, "the base url this workbook ships with is https", _
+          IsHttpsUrl(CfgBaseUrl())
+    CheckTrue failures, "plain http is not accepted as https", _
+          Not IsHttpsUrl("http://model.oxfordeconomics.com/api")
+    CheckTrue failures, "a host with no scheme at all is not accepted as https", _
+          Not IsHttpsUrl("model.oxfordeconomics.com/api")
+    CheckTrue failures, "text that is not a url is not accepted as https", _
+          Not IsHttpsUrl("not a url at all")
+    CheckTrue failures, "a scheme that merely begins with https is not accepted", _
+          Not IsHttpsUrl("httpsx://model.oxfordeconomics.com")
 End Sub
 
 ' SafeFileName. The artifact filename arrives in the API's response and
@@ -1772,6 +1878,40 @@ Private Sub CheckConfigLock(ByRef failures As Collection)
           Not CBool(NamedRange("cfg_OutputFolder").Locked)
     CheckTrue failures, "the status cell the code writes to is still editable", _
           Not CBool(NamedRange("cfg_Status").Locked)
+End Sub
+
+' SetCfgValue reports whether the write actually landed, and ClearToken is built on
+' that answer: the button a client presses before sharing the file has to be able to
+' say it did not work. Silently doing nothing while showing the reassuring message is
+' how a live access token leaves the building.
+'
+' cfg_Status is the subject rather than cfg_AccessToken - a check must never write to
+' the token cell - and it is put back either way. Check and CheckTrue never raise, so
+' the restore at the end is reached even when an assertion fails.
+Private Sub CheckCfgWrite(ByRef failures As Collection)
+    Dim before As String
+
+    CheckTrue failures, "writing a cfg cell that does not exist reports failure", _
+          Not SetCfgValue("cfg_NoSuchCellExists", "x")
+
+    If NamedRange("cfg_Status") Is Nothing Then
+        Fail failures, "cfg_Status is missing, so the write-back check cannot run"
+        Exit Sub
+    End If
+
+    before = CfgValue("cfg_Status")
+
+    CheckTrue failures, "writing a cfg cell that does exist reports success", _
+          SetCfgValue("cfg_Status", "self-test write")
+    Check failures, "and the value reached the cell", _
+          CfgValue("cfg_Status"), "self-test write"
+
+    CheckTrue failures, "clearing a cfg cell reports success", _
+          SetCfgValue("cfg_Status", vbNullString)
+    Check failures, "and leaves it empty, which is what ClearToken relies on", _
+          CfgValue("cfg_Status"), ""
+
+    SetCfgValue "cfg_Status", before
 End Sub
 
 Private Sub CheckJsonHandling(ByRef failures As Collection)
